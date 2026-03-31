@@ -1,0 +1,8 @@
+[Nemo Action]
+Name=Fix Web Permissions
+Comment=Fix ownership and permissions for web directories
+Exec=pkexec bash -c "usermod -aG www-data $USER && chown -R $USER:www-data %F && find %F -type d -exec chmod 2775 {} + && find %F -type f -exec chmod 0664 {} + && notify-send 'Permissions Fixed' 'Ownership set to $USER:www-data for %n' --icon=dialog-ok"
+Icon-Name=dialog-password
+Selection=any
+Extensions=dir;
+Quote=double
