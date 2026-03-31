@@ -1,0 +1,156 @@
+#!/bin/bash
+# ==========================================
+# devzone-linux WEB PERMISSIONS FIXER
+# Fixes ownership and permissions for web directories
+# Usage: fix_web [path] [--dry-run]
+# ==========================================
+
+# Resolve script directory for sourcing lib.sh
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_PATH="/usr/local/lib/devtools/lib.sh"
+
+if [ -f "$LIB_PATH" ]; then
+    source "$LIB_PATH"
+elif [ -f "$SCRIPT_DIR/lib.sh" ]; then
+    source "$SCRIPT_DIR/lib.sh"
+else
+    echo "❌ Cannot find lib.sh. Run install.sh first."
+    exit 1
+fi
+
+root_check
+get_user
+
+# --- Parse arguments ---
+WEB_ROOT="/var/www/html"
+DRY_RUN=false
+TARGET=""
+
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run|-n)
+            DRY_RUN=true
+            ;;
+        --help|-h)
+            echo "Usage: fix_web [path] [--dry-run]"
+            echo ""
+            echo "Fix ownership and permissions for web directories."
+            echo ""
+            echo "  path        Target directory (default: /var/www/html)"
+            echo "  --dry-run   Show what would change without applying"
+            echo ""
+            echo "What it does:"
+            echo "  - Adds current user to www-data group"
+            echo "  - Sets ownership to user:www-data"
+            echo "  - Sets directory permissions to 2775 (setgid)"
+            echo "  - Sets file permissions to 0664"
+            exit 0
+            ;;
+        *)
+            if [ -z "$TARGET" ]; then
+                TARGET="$arg"
+            fi
+            ;;
+    esac
+done
+
+# Default to /var/www/html if no path given
+TARGET="${TARGET:-$WEB_ROOT}"
+
+# Validate target
+if [ ! -d "$TARGET" ]; then
+    log_err "Directory does not exist: $TARGET"
+    exit 1
+fi
+
+# Ensure absolute path
+TARGET=$(cd "$TARGET" && pwd)
+
+separator
+echo -e "${BOLD}🔐 WEB PERMISSIONS FIXER${NC}"
+separator
+
+if $DRY_RUN; then
+    log_warn "DRY RUN — no changes will be applied"
+    echo ""
+fi
+
+log_info "Target: $TARGET"
+log_info "User: $ACTUAL_USER"
+log_info "Group: www-data"
+echo ""
+
+# Count files and dirs
+local dir_count
+local file_count
+dir_count=$(find "$TARGET" -type d | wc -l)
+file_count=$(find "$TARGET" -type f | wc -l)
+
+log_item "Directories: $dir_count"
+log_item "Files: $file_count"
+echo ""
+
+if ! $DRY_RUN; then
+    if ! ask_permission "Apply permissions to $TARGET?"; then
+        exit 0
+    fi
+    echo ""
+fi
+
+# Step 1: Add user to www-data group
+if ! $DRY_RUN; then
+    if ! groups "$ACTUAL_USER" | grep -q "www-data"; then
+        usermod -aG www-data "$ACTUAL_USER"
+        log_ok "Added $ACTUAL_USER to www-data group"
+    else
+        log_item "$ACTUAL_USER is already in www-data group"
+    fi
+else
+    log_item "[DRY RUN] Would add $ACTUAL_USER to www-data group"
+fi
+
+# Step 2: Set ownership
+if ! $DRY_RUN; then
+    chown -R "$ACTUAL_USER":www-data "$TARGET"
+    log_ok "Ownership set to $ACTUAL_USER:www-data"
+else
+    log_item "[DRY RUN] Would chown -R $ACTUAL_USER:www-data $TARGET"
+fi
+
+# Step 3: Set directory permissions (2775 = setgid + rwxrwxr-x)
+if ! $DRY_RUN; then
+    find "$TARGET" -type d -exec chmod 2775 {} \;
+    log_ok "Directory permissions set to 2775 (setgid)"
+else
+    log_item "[DRY RUN] Would chmod 2775 on $dir_count directories"
+fi
+
+# Step 4: Set file permissions (0664 = rw-rw-r--)
+if ! $DRY_RUN; then
+    find "$TARGET" -type f -exec chmod 0664 {} \;
+    log_ok "File permissions set to 0664"
+else
+    log_item "[DRY RUN] Would chmod 0664 on $file_count files"
+fi
+
+echo ""
+separator
+
+if ! $DRY_RUN; then
+    echo -e "${GREEN}${BOLD}✅ Permissions fixed!${NC}"
+    echo ""
+    echo -e "  Owner:     ${BOLD}$ACTUAL_USER${NC}"
+    echo -e "  Group:     ${BOLD}www-data${NC}"
+    echo -e "  Dirs:      ${BOLD}2775${NC} (setgid — new files inherit www-data group)"
+    echo -e "  Files:     ${BOLD}0664${NC} (rw-rw-r--)"
+    echo ""
+
+    if ! groups "$ACTUAL_USER" 2>/dev/null | grep -q "www-data"; then
+        echo -e "  ${YELLOW}⚠  Log out and back in for group changes to take effect.${NC}"
+    fi
+else
+    echo -e "${CYAN}${BOLD}ℹ  Dry run complete. No changes applied.${NC}"
+    echo -e "  Run without --dry-run to apply."
+fi
+
+separator

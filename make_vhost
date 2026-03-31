@@ -1,0 +1,316 @@
+#!/bin/bash
+# ==========================================
+# devzone-linux VHOST MANAGER
+# Add, delete, and list virtual hosts
+# Supports Apache and Nginx
+# ==========================================
+
+# Resolve script directory for sourcing lib.sh
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_PATH="/usr/local/lib/devtools/lib.sh"
+
+if [ -f "$LIB_PATH" ]; then
+    source "$LIB_PATH"
+elif [ -f "$SCRIPT_DIR/lib.sh" ]; then
+    source "$SCRIPT_DIR/lib.sh"
+else
+    echo "❌ Cannot find lib.sh. Run install.sh first."
+    exit 1
+fi
+
+root_check
+get_user
+
+WEB_ROOT="/var/www/html"
+
+# --- Detect web server ---
+detect_web_server
+case "$WEB_SERVER" in
+    apache) SERVER_LABEL="Apache" ;;
+    nginx)  SERVER_LABEL="Nginx" ;;
+    *)
+        log_err "No web server detected. Install Apache or Nginx first."
+        exit 1
+        ;;
+esac
+
+# ==========================================
+# ADD VHOST
+# ==========================================
+cmd_add() {
+    log_step "Add Virtual Host ($SERVER_LABEL)"
+
+    read -rp "$(echo -e "   ${CYAN}Domain name${NC} (e.g., myproject.test): ")" domain
+    if [ -z "$domain" ]; then
+        log_err "Domain name is required"
+        exit 1
+    fi
+
+    # Check if vhost already exists
+    if grep -rq "$domain" /etc/hosts 2>/dev/null; then
+        log_warn "Domain '$domain' already exists in /etc/hosts"
+        if ! ask_permission "Continue anyway?"; then
+            exit 0
+        fi
+    fi
+
+    read -rp "$(echo -e "   ${CYAN}Project directory${NC} (inside $WEB_ROOT/): ")" raw_dir
+    raw_dir=$(echo "$raw_dir" | sed -e 's/^\/*//' -e 's/\/*$//')
+    local full_path="$WEB_ROOT/$raw_dir"
+
+    # Ask about /public document root
+    local docroot="$full_path"
+    if ask_permission "Does this project use a /public document root?"; then
+        docroot="$full_path/public"
+    fi
+
+    # Create directory if needed
+    if [ ! -d "$docroot" ]; then
+        mkdir -p "$docroot"
+        chown -R "$ACTUAL_USER":www-data "$full_path"
+        log_item "Created: $docroot"
+    fi
+
+    # Create a default index if none exists
+    if [ ! -f "$docroot/index.php" ] && [ ! -f "$docroot/index.html" ]; then
+        cat > "$docroot/index.html" <<HTML
+<!DOCTYPE html>
+<html>
+<head><title>$domain</title></head>
+<body>
+<h1>$domain is live!</h1>
+<p>Served from: $docroot</p>
+</body>
+</html>
+HTML
+        chown "$ACTUAL_USER":www-data "$docroot/index.html"
+        log_item "Created default index.html"
+    fi
+
+    # Generate server config
+    if [ "$WEB_SERVER" = "apache" ]; then
+        local conf_file="/etc/apache2/sites-available/${domain}.conf"
+        cat > "$conf_file" <<EOF
+<VirtualHost *:80>
+    ServerName $domain
+    DocumentRoot $docroot
+
+    <Directory $docroot>
+        Options Indexes FollowSymLinks
+        AllowOverride All
+        Require all granted
+    </Directory>
+
+    ErrorLog \${APACHE_LOG_DIR}/${domain}_error.log
+    CustomLog \${APACHE_LOG_DIR}/${domain}_access.log combined
+</VirtualHost>
+EOF
+        a2ensite "${domain}.conf" > /dev/null 2>&1
+        systemctl reload apache2
+
+    elif [ "$WEB_SERVER" = "nginx" ]; then
+        local conf_file="/etc/nginx/sites-available/${domain}"
+        local php_fpm_sock="unix:/run/php/php-fpm.sock"
+
+        # Detect PHP-FPM socket
+        local php_ver
+        php_ver=$(ls /run/php/php*-fpm.sock 2>/dev/null | head -1)
+        [ -n "$php_ver" ] && php_fpm_sock="$php_ver"
+
+        cat > "$conf_file" <<EOF
+server {
+    listen 80;
+    listen [::]:80;
+
+    server_name $domain;
+    root $docroot;
+    index index.php index.html index.htm;
+
+    location / {
+        try_files \$uri \$uri/ /index.php?\$query_string;
+    }
+
+    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass $php_fpm_sock;
+    }
+
+    location ~ /\.ht {
+        deny all;
+    }
+
+    error_log /var/log/nginx/${domain}_error.log;
+    access_log /var/log/nginx/${domain}_access.log;
+}
+EOF
+        ln -sf "$conf_file" "/etc/nginx/sites-enabled/${domain}"
+        nginx -t 2>/dev/null && systemctl reload nginx
+    fi
+
+    log_item "Created $SERVER_LABEL config: $conf_file"
+
+    # Add to /etc/hosts
+    if ! grep -q "$domain" /etc/hosts; then
+        echo "127.0.0.1    $domain" >> /etc/hosts
+        log_item "Added $domain to /etc/hosts"
+    fi
+
+    separator
+    log_ok "http://$domain is live → $docroot"
+}
+
+# ==========================================
+# DELETE VHOST
+# ==========================================
+cmd_delete() {
+    log_step "Delete Virtual Host ($SERVER_LABEL)"
+
+    # Gather list of vhosts
+    local vhosts=()
+    local vhost_files=()
+
+    if [ "$WEB_SERVER" = "apache" ]; then
+        for conf in /etc/apache2/sites-enabled/*.conf; do
+            [ -f "$conf" ] || continue
+            # Skip default
+            [[ "$conf" == *"000-default"* ]] && continue
+            local name
+            name=$(basename "$conf" .conf)
+            vhosts+=("$name")
+            vhost_files+=("$conf")
+        done
+    elif [ "$WEB_SERVER" = "nginx" ]; then
+        for conf in /etc/nginx/sites-enabled/*; do
+            [ -f "$conf" ] || continue
+            [[ "$conf" == *"default"* ]] && continue
+            local name
+            name=$(basename "$conf")
+            vhosts+=("$name")
+            vhost_files+=("$conf")
+        done
+    fi
+
+    if [ ${#vhosts[@]} -eq 0 ]; then
+        log_warn "No virtual hosts found"
+        exit 0
+    fi
+
+    ask_select "Which virtual host to delete?" "${vhosts[@]}"
+    local target="${vhosts[$SELECTED]}"
+
+    log_warn "About to delete: $target"
+    if ! ask_permission "Are you sure?"; then
+        exit 0
+    fi
+
+    # Find the project directory
+    local project_dir=""
+    if [ "$WEB_SERVER" = "apache" ]; then
+        project_dir=$(grep -oP 'DocumentRoot \K.*' "/etc/apache2/sites-available/${target}.conf" 2>/dev/null)
+        # Strip /public if present
+        project_dir=$(echo "$project_dir" | sed 's|/public$||')
+    elif [ "$WEB_SERVER" = "nginx" ]; then
+        project_dir=$(grep -oP 'root \K[^;]+' "/etc/nginx/sites-available/${target}" 2>/dev/null)
+        project_dir=$(echo "$project_dir" | sed 's|/public$||')
+    fi
+
+    # Disable and remove config
+    if [ "$WEB_SERVER" = "apache" ]; then
+        a2dissite "${target}.conf" > /dev/null 2>&1
+        rm -f "/etc/apache2/sites-available/${target}.conf"
+        systemctl reload apache2
+    elif [ "$WEB_SERVER" = "nginx" ]; then
+        rm -f "/etc/nginx/sites-enabled/${target}"
+        rm -f "/etc/nginx/sites-available/${target}"
+        systemctl reload nginx
+    fi
+    log_item "Removed $SERVER_LABEL config"
+
+    # Remove from /etc/hosts
+    if grep -q "$target" /etc/hosts; then
+        sed -i "/${target}/d" /etc/hosts
+        log_item "Removed $target from /etc/hosts"
+    fi
+
+    # Optionally delete project files
+    if [ -n "$project_dir" ] && [ -d "$project_dir" ]; then
+        if ask_permission "Delete project files at $project_dir?"; then
+            rm -rf "$project_dir"
+            log_item "Deleted $project_dir"
+        fi
+    fi
+
+    log_ok "Virtual host '$target' removed"
+}
+
+# ==========================================
+# LIST VHOSTS
+# ==========================================
+cmd_list() {
+    log_step "Virtual Hosts ($SERVER_LABEL)"
+
+    local count=0
+
+    if [ "$WEB_SERVER" = "apache" ]; then
+        for conf in /etc/apache2/sites-available/*.conf; do
+            [ -f "$conf" ] || continue
+            [[ "$conf" == *"000-default"* ]] && continue
+
+            local name
+            name=$(basename "$conf" .conf)
+            local docroot
+            docroot=$(grep -oP 'DocumentRoot \K.*' "$conf" 2>/dev/null)
+            local enabled=false
+            [ -f "/etc/apache2/sites-enabled/$(basename "$conf")" ] && enabled=true
+
+            local status="${RED}disabled${NC}"
+            $enabled && status="${GREEN}enabled${NC}"
+
+            echo -e "   ${BOLD}$name${NC}  ($status)  →  $docroot"
+            ((count++))
+        done
+
+    elif [ "$WEB_SERVER" = "nginx" ]; then
+        for conf in /etc/nginx/sites-available/*; do
+            [ -f "$conf" ] || continue
+            [[ "$conf" == *"default"* ]] && continue
+
+            local name
+            name=$(basename "$conf")
+            local docroot
+            docroot=$(grep -oP 'root \K[^;]+' "$conf" 2>/dev/null)
+            local enabled=false
+            [ -f "/etc/nginx/sites-enabled/$name" ] && enabled=true
+
+            local status="${RED}disabled${NC}"
+            $enabled && status="${GREEN}enabled${NC}"
+
+            echo -e "   ${BOLD}$name${NC}  ($status)  →  $docroot"
+            ((count++))
+        done
+    fi
+
+    if [ $count -eq 0 ]; then
+        log_warn "No virtual hosts found"
+    else
+        echo ""
+        log_info "$count virtual host(s) configured"
+    fi
+}
+
+# ==========================================
+# MAIN
+# ==========================================
+case "${1:-add}" in
+    add)    cmd_add ;;
+    delete) cmd_delete ;;
+    list)   cmd_list ;;
+    *)
+        echo "Usage: make_vhost [add|delete|list]"
+        echo ""
+        echo "  add      Create a new virtual host (default)"
+        echo "  delete   Remove an existing virtual host"
+        echo "  list     Show all configured virtual hosts"
+        exit 1
+        ;;
+esac
