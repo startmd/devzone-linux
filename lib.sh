@@ -276,10 +276,16 @@ add_apt_repo() {
 
     log_item "Adding $name repository..."
     install -m 0755 -d /etc/apt/keyrings
-    curl -fsSL "$key_url" | gpg --dearmor -o "$keyring_path"
-    chmod 0644 "$keyring_path"
-    echo "$repo_line" > "/etc/apt/sources.list.d/${name}.list"
-    apt update -qq
+    curl -fsSL --connect-timeout 10 --max-time 15 "$key_url" 2>/dev/null | gpg --dearmor -o "$keyring_path" 2>/dev/null
+    if [ -f "$keyring_path" ]; then
+        chmod 0644 "$keyring_path"
+        echo "$repo_line" > "/etc/apt/sources.list.d/${name}.list"
+        apt update -qq
+        log_ok "$name repo added successfully"
+    else
+        log_warn "$name repo skipped (could not fetch GPG key)"
+        return 1
+    fi
 }
 
 # --- Run Command with Logging ---

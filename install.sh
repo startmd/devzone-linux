@@ -37,7 +37,7 @@ echo ""
 # --- Verify source files exist ---
 log_info "Verifying source files..."
 
-REQUIRED_FILES=("lib.sh" "setup" "make_vhost" "fix_web")
+REQUIRED_FILES=("lib.sh" "devzone-setup" "make_vhost" "fix_web")
 for f in "${REQUIRED_FILES[@]}"; do
     if [ ! -f "$SCRIPT_DIR/$f" ]; then
         log_err "Missing: $SCRIPT_DIR/$f"
@@ -71,9 +71,8 @@ log_ok "Installed to /usr/local/lib/devtools/lib.sh"
 # --- Install CLI tools ---
 log_info "Installing CLI tools..."
 
-for tool in setup make_vhost fix_web; do
+for tool in devzone-setup make_vhost fix_web; do
     src="$SCRIPT_DIR/$tool"
-    # setup.sh → /usr/local/bin/setup
     dst="/usr/local/bin/$(echo "$tool" | sed 's/\.sh$//')"
     cp "$src" "$dst"
     chmod +x "$dst"
@@ -105,13 +104,13 @@ echo -e "${GREEN}${BOLD}✅ INSTALLATION COMPLETE${NC}"
 separator
 echo ""
 echo -e "  ${CYAN}Installed commands:${NC}"
-echo -e "    ${BOLD}sudo setup${NC}          — Interactive dev environment installer"
+echo -e "    ${BOLD}sudo devzone-setup${NC}  — Interactive / CLI dev environment installer"
 echo -e "    ${BOLD}sudo make_vhost${NC}     — Add/delete virtual hosts"
 echo -e "    ${BOLD}sudo make_vhost list${NC} — List all virtual hosts"
 echo -e "    ${BOLD}sudo fix_web${NC}        — Fix web directory permissions"
 echo -e "    ${BOLD}sudo fix_web [path]${NC} — Fix specific directory"
 echo ""
 echo -e "  ${CYAN}Next step:${NC}"
-echo -e "    ${BOLD}sudo setup${NC}"
+echo -e "    ${BOLD}sudo devzone-setup${NC}"
 echo ""
 separator
