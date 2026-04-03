@@ -7,7 +7,7 @@ Complete reference for all tools, configuration, and architecture.
 ## Table of Contents
 
 1. [Installation](#installation)
-2. [setup.sh](#setupsh)
+2. [devzone-setup](#devzone-setup)
 3. [make_vhost](#make_vhost)
 4. [fix_web](#fix_web)
 5. [lib.sh API](#libsh-api)
@@ -38,7 +38,7 @@ This installs:
 | Source | Destination |
 |--------|-------------|
 | `lib.sh` | `/usr/local/lib/devtools/lib.sh` |
-| `setup.sh` | `/usr/local/bin/setup` |
+| `devzone-setup` | `/usr/local/bin/devzone-setup` |
 | `make_vhost` | `/usr/local/bin/make_vhost` |
 | `fix_web` | `/usr/local/bin/fix_web` |
 | `nemo/fix-permissions.nemo_action` | `~/.local/share/nemo/actions/` |
@@ -46,18 +46,70 @@ This installs:
 ### Uninstall
 
 ```bash
-sudo rm /usr/local/bin/setup /usr/local/bin/make_vhost /usr/local/bin/fix_web
+sudo rm /usr/local/bin/devzone-setup /usr/local/bin/make_vhost /usr/local/bin/fix_web
 sudo rm -rf /usr/local/lib/devtools
 rm ~/.local/share/nemo/actions/fix-permissions.nemo_action
 ```
 
 ---
 
-## setup.sh
+## devzone-setup
 
-Interactive developer environment installer. Run with `sudo setup`.
+Interactive and CLI developer environment installer. Run with `sudo devzone-setup`.
 
-### Sections
+### CLI Parameters
+
+Run without arguments for interactive mode. Pass any flag for fully non-interactive mode — only specified components are installed.
+
+```
+sudo devzone-setup [OPTIONS]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--help, -h` | Show help and exit |
+| `--installer TYPE` | Package manager: `apt`, `flatpak`, `snap` (default: `apt`) |
+| `--essentials` | Install core packages (curl, wget, git, etc.) |
+| `--ide NAME` | IDE to install (repeatable): `vscode`, `jetbrains`, `zed`, `antigravity`, `cursor` |
+| `--agent NAME` | Coding agent (repeatable): `claude`, `gemini`, `opencode`, `kilo`, `codex` |
+| `--web apache\|nginx` | Web server to install |
+| `--php VER` | PHP version (repeatable): `8.0`, `8.1`, `8.2`, `8.3`, `8.4` |
+| `--php-default VER` | Set default CLI PHP version |
+| `--lang NAME` | Language (repeatable): `nodejs`, `python`, `rust`, `go` |
+| `--git` | Configure git |
+| `--git-name NAME` | Git user.name |
+| `--git-email EMAIL` | Git user.email |
+| `--git-extras` | Install GitHub CLI, git-lfs, tig |
+| `--db mysql\|mariadb` | MySQL or MariaDB |
+| `--postgresql` | Install PostgreSQL |
+| `--sqlite` | Install SQLite |
+| `--db-user USER` | Database dev username |
+| `--db-pass PASS` | Database dev password |
+| `--mailpit` | Install Mailpit (local email testing) |
+| `--db-admin NAME` | DB admin tool (repeatable): `adminer`, `phpminiadmin`, `phpmyadmin` |
+| `--gitea` | Install Gitea (self-hosted Git server) |
+| `--fix-permissions` | Fix /var/www/html permissions |
+
+**Examples:**
+
+```bash
+sudo devzone-setup                                        # Interactive mode
+sudo devzone-setup --web apache --php 8.4                 # Apache + PHP 8.4 only
+sudo devzone-setup --web nginx --php 8.2 --php 8.4 --db mariadb
+sudo devzone-setup --ide vscode --agent claude --lang nodejs
+sudo devzone-setup --gitea --db mariadb --postgresql --web nginx
+```
+
+**Validation rules:**
+
+- `--php-default` requires at least one `--php` version and must match one of them
+- `--git-name` / `--git-email` implies `--git`
+- `--agent` auto-adds `--lang nodejs` (agents require npm)
+- `--db-admin` auto-adds `--web apache` and `--essentials` if no web server specified
+- `--gitea` without `--db` / `--postgresql` warns and skips (Gitea needs a database)
+- Unknown flags produce an error with usage hint
+
+### Interactive Sections
 
 #### Step 0: Package Manager Preference
 
@@ -79,35 +131,27 @@ Multi-select. Each IDE supports multiple install methods:
 
 | IDE | apt | flatpak | snap |
 |-----|-----|---------|------|
-| VS Code | Microsoft repo | `com.visualstudio.code` | `code` |
+| VS Code | Microsoft repo (`packages.microsoft.com/repos/vscode`) | `com.visualstudio.code` | `code` |
 | JetBrains Toolbox | tarball download | — | — |
 | Zed | official script | `dev.zed.Zed` | — |
-| Pulsar | `pulsar-edit.dev` repo | `dev.pulsar_edit.Pulsar` | `pulsar-edit` |
 | Antigravity | Google repo | — | — |
-| Cursor | AppImage download | — | — |
+| Cursor | official deb package | — | — |
+
+**Notes:**
+- Pulsar project is discontinued. The apt repository may be unavailable. Flatpak/snap still work.
+- Antigravity repository may be unavailable. If the GPG key fetch fails, the repo is skipped gracefully.
+- Cursor falls back to GitHub releases if the direct AppImage download fails.
 
 JetBrains Toolbox opens a sub-menu for specific IDEs: PhpStorm, WebStorm, PyCharm, IntelliJ IDEA, GoLand, CLion, Rider, RustRover, DataGrip.
 
-#### Step 3: Coding Agents
-
-All installed via `npm install -g`:
-
-| Agent | Package |
-|-------|---------|
-| Claude Code | `@anthropic-ai/claude-code` |
-| Gemini CLI | `@google/gemini-cli` |
-| OpenCode | `opencode-ai` |
-| KiloCode | `@kilocode/cli` |
-| Codex | `@openai/codex` |
-
-#### Step 4: Web Server
+#### Step 3: Web Server
 
 Pick one:
 
 - **Apache** — enables `rewrite`, `proxy`, `proxy_http`, `ssl`, `headers`, `expires`
 - **Nginx** — configures `worker_processes auto`, `client_max_body_size 48M`, PHP-FPM upstream
 
-#### Step 5: PHP
+#### Step 4: PHP
 
 Multi-select versions: **8.0, 8.1, 8.2, 8.3, 8.4**
 
@@ -120,7 +164,7 @@ For each selected version:
 
 Prompts for default CLI version.
 
-#### Step 6: Languages
+#### Step 5: Languages
 
 | Language | Install Method | Config |
 |----------|---------------|--------|
@@ -128,6 +172,20 @@ Prompts for default CLI version.
 | Python | apt (`python3-pip`, `python3-venv`, `python3-dev`) | — |
 | Rust | `rustup.rs` official installer | PATH added to `.bashrc` + `.profile` |
 | Go | official tarball to `/usr/local/go` | PATH added to `.bashrc` + `.profile` |
+
+#### Step 6: Coding Agents (Deferred)
+
+All installed via `npm install -g` (after Node.js installation):
+
+| Agent | Package |
+|-------|---------|
+| Claude Code | `@anthropic-ai/claude-code` |
+| Gemini CLI | `@google/gemini-cli` |
+| OpenCode | `opencode-ai` |
+| KiloCode | `@kilocode/cli` |
+| Codex | `@openai/codex` |
+
+**Note:** Coding agents are deferred until after Node.js is installed to ensure `npm` is available. If you select agents in Step 2 (IDEs), they will be installed here automatically.
 
 #### Step 7: Git
 
@@ -414,9 +472,9 @@ Default site configured with `index.php` support and PHP-FPM upstream.
 devzone-linux/
 ├── install.sh              ← Entry point: copies files to system
 ├── lib.sh                  ← Shared library (sourced by all scripts)
-├── setup.sh                ← Interactive installer (source lib.sh)
-├── make_vhost              ← Vhost manager (source lib.sh)
-├── fix_web                 ← Permission fixer (source lib.sh)
+├── devzone-setup           ← Interactive/CLI installer (sources lib.sh)
+├── make_vhost              ← Vhost manager (sources lib.sh)
+├── fix_web                 ← Permission fixer (sources lib.sh)
 ├── nemo/
 │   └── fix-permissions.nemo_action
 ├── README.md               ← GitHub homepage
@@ -430,16 +488,21 @@ devzone-linux/
 2. Each CLI tool sources `lib.sh` from the installed location
 3. Tools also fallback to local `./lib.sh` if run from source directory
 4. `$INSTALLER` variable controls which package backend is used throughout
+5. `devzone-setup` supports both interactive prompts and CLI flags (non-interactive mode)
+6. Coding agents are deferred until after Node.js installation to ensure `npm` is available
 
 ### Adding New Tools
 
-To add a new tool to `setup.sh`:
+To add a new tool to `devzone-setup`:
 
-1. Add a new section in `setup.sh` with `log_step`
-2. Use `ask_permission` or `ask_multi` for user input
-3. Use `install_app` for package installation
-4. Use `set_php_ini` or config file writes for configuration
-5. Add to `lib.sh` if it needs shared helpers
+1. Add a new `step_*` function in `devzone-setup` with `log_step`
+2. Add a CLI flag to `parse_args()` and the corresponding `CLI_*` variable
+3. Support both `$NON_INTERACTIVE` and interactive modes in the step function
+4. Use `ask_permission` or `ask_multi` for interactive user input
+5. Use `install_app` for package installation
+6. Use `set_php_ini` or config file writes for configuration
+7. Call the new step function in the main flow section
+8. Add to `lib.sh` if it needs shared helpers
 
 ---
 
@@ -447,7 +510,7 @@ To add a new tool to `setup.sh`:
 
 ### Snap blocked on Linux Mint
 
-Linux Mint blocks snap by default with `/etc/apt/preferences.d/nosnap.pref`. The setup script detects this and offers to remove the blocker. To manually unblock:
+Linux Mint blocks snap by default with `/etc/apt/preferences.d/nosnap.pref`. The `devzone-setup` script detects this and offers to remove the blocker. To manually unblock:
 
 ```bash
 sudo mv /etc/apt/preferences.d/nosnap.pref /etc/apt/preferences.d/nosnap.pref.bak
@@ -490,6 +553,8 @@ npm global binaries may not be in PATH. Add to `~/.bashrc`:
 ```bash
 export PATH="$PATH:$(npm config get prefix)/bin"
 ```
+
+**Note:** Since coding agents are installed via npm, they require Node.js to be installed first. The installer now automatically handles this dependency by installing agents after Node.js in the Languages step.
 
 ### Rust/Go not available in current shell
 
